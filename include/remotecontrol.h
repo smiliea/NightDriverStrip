@@ -154,6 +154,7 @@ class RemoteControl
 {
   private:
     IRrecv _IR_Receive;
+    
 
   public:
 
@@ -165,6 +166,7 @@ class RemoteControl
     {
         debugW("Remote Control Decoding Started");
         _IR_Receive.enableIRIn();
+        g_Brightness = 85;  // I couldn't see a change in the display until around a Brightness of 85
         return true;
     }
 
@@ -177,7 +179,7 @@ class RemoteControl
     void handle()
     {
         decode_results results;
-        static uint lastResult = 0;
+        static uint lastResult = 0;       
 
         if (!_IR_Receive.decode(&results))
             return;
@@ -187,62 +189,86 @@ class RemoteControl
 
         debugW("Received IR Remote Code: 0x%08X, Decode: %08X\n", result, results.decode_type);
 
-        if (0xFFFFFFFF == result)
+        // Handle each button on IR remote pressed. Default case handles anything unknown.
+        switch (result)
         {
-            debugV("Remote Repeat; lastResult == %08x\n", lastResult);
-            result = lastResult;
+        case IR_ON:
+            {
+                debugW("Turning ON via remote");
+                g_ptrEffectManager->ClearRemoteColor();
+                g_ptrEffectManager->SetInterval(0);
+                g_ptrEffectManager->StartEffect();
+                g_Brightness = 255;
+                break;
+            }
+         case IR_OFF:
+                debugW("Turning OFF via remote");
+                // TODO
+            break;
+
+        case IR_BPLUS:
+            {
+                debugW("Setting Max Brightness (255)");
+                g_Brightness = MAX_BRIGHTNESS;
+                break;    
+            }
+
+        case IR_BMINUS:
+            {
+                if(g_Brightness >= BRIGHTNESS_STEP)
+                {
+                    if(g_Brightness > 95)
+                    {
+                        g_Brightness = 95; //  I couldn't tell a reduction in brightness until around 85 decimal on Matrix Display
+                        break;
+                    }
+                    else
+                    {    
+                        g_Brightness = std::max(MIN_BRIGHTNESS, (int) g_Brightness - BRIGHTNESS_STEP); //Reduce brigtness by defined step
+                        debugI("Current brightness level: %d", g_Brightness);
+                        break;
+                    }
+
+                    break;   
+                }
+            }  
+        case IR_SMOOTH:
+            {
+                debugW("IR Smooth Button Pressed.");
+                g_ptrEffectManager->ClearRemoteColor();
+                g_ptrEffectManager->SetInterval(EffectManager<GFXBase>::csSmoothButtonSpeed);
+                break;    
+            }
+        case IR_STROBE:
+            {
+                debugW("IR Strobe Button Pressed.");
+                g_ptrEffectManager->PreviousEffect();
+                break;
+            }
+        case IR_FLASH:
+            {
+                g_ptrEffectManager->NextEffect();
+            } 
+        case IR_FADE:
+            {
+                g_ptrEffectManager->ShowVU( !g_ptrEffectManager->IsVUVisible() );
+            }              
+        default:
+            {
+                debugV("Remote Repeat; lastResult == %08x\n", lastResult);
+                result = lastResult;
+            }
+            break;
         }
 
-        if (IR_ON == result)
-        {
-            debugV("Turning ON via remote");
-            g_ptrEffectManager->ClearRemoteColor();
-            g_ptrEffectManager->SetInterval(0);
-            g_ptrEffectManager->StartEffect();
-            g_Brightness = 255;
-            return;
-        }
-        else if (IR_OFF == result)
-        {
-            g_Brightness = std::max(MIN_BRIGHTNESS, (int) g_Brightness - BRIGHTNESS_STEP);
-            return;
-        }
-        else if (IR_BPLUS == result)
-        {
-            g_ptrEffectManager->ClearRemoteColor();
-            g_ptrEffectManager->NextEffect();
-            return;
-        }
-        else if (IR_BMINUS == result)
-        {
-            g_ptrEffectManager->ClearRemoteColor();
-            g_ptrEffectManager->PreviousEffect();
-            return;
-        }
-        else if (IR_SMOOTH == result)
-        {
-            g_ptrEffectManager->ClearRemoteColor();
-            g_ptrEffectManager->SetInterval(EffectManager<GFXBase>::csSmoothButtonSpeed);
-        }
-        else if (IR_STROBE == result)
-        {
-            g_ptrEffectManager->NextPalette();
-        }
-        else if (IR_FLASH == result)
-        {
-            g_ptrEffectManager->PreviousPalette();
-        }
-        else if (IR_FADE == result)
-        {
-            g_ptrEffectManager->ShowVU( !g_ptrEffectManager->IsVUVisible() );
-        }
-
+        // Iterate through all LED pixels and assign color codes from RemoteColorCodes Enumeration
         for (int i = 0; i < ARRAYSIZE(RemoteColorCodes); i++)
         {
             if (RemoteColorCodes[i].code == result)
             {
                 debugV("Changing Color via remote: %08X\n", (uint) RemoteColorCodes[i].color);
                 g_ptrEffectManager->SetGlobalColor(RemoteColorCodes[i].color);
+                
                 return;
             }
         }
