@@ -102,8 +102,6 @@ for device in devices:
 
             template = merged_template
         else:
-            subprocess.run(['pio', 'run', '-e', tag, '-t', 'buildfs'])
-
             # Copy all .bin files from the build directory, EXCEPT the merged one
             bin_files = glob.glob(os.path.join(build_dir, '*.bin'))
 
