@@ -166,7 +166,6 @@ class RemoteControl
     {
         debugW("Remote Control Decoding Started");
         _IR_Receive.enableIRIn();
-        g_Brightness = 85;  // I couldn't see a change in the display until around a Brightness of 85
         return true;
     }
 
