@@ -219,6 +219,8 @@ class RemoteControl
                     if(g_Brightness > 95)
                     {
                         g_Brightness = 95; //  I couldn't tell a reduction in brightness until around 85 decimal on Matrix Display
+                        g_Brightness = std::max(MIN_BRIGHTNESS, (int) g_Brightness - BRIGHTNESS_STEP); //Reduce brigtness by defined step
+                        debugI("Current brightness level: %d", g_Brightness);
                         break;
                     }
                     else
