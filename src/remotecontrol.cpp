@@ -84,22 +84,20 @@ void RemoteControl::handle()
     }
     else if (IR_OFF == result)
     {
-
         return;
     }
     else if (IR_BPLUS == result)
     {
-
         CurBrightness= 255;
         g_Values.Brightness = CurBrightness;
+        debugI("Changing Brightness: %d\n", g_Values.Brightness);
         return;
     }
     else if (IR_BMINUS == result)
     {
-
         CurBrightness = std::max(MIN_BRIGHTNESS, (int) g_Values.Brightness - BRIGHTNESS_STEP);
         g_Values.Brightness = CurBrightness;
-        debugV("Changing Brightness: %d\n", g_Values.Brightness);
+        debugI("Changing Brightness: %d\n", g_Values.Brightness);
         return;
     }
     else if (IR_SMOOTH == result)
