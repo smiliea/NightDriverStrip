@@ -28,11 +28,13 @@
 // History:     Jun-14-2023     Rbergen        Extracted handle() from header
 //---------------------------------------------------------------------------
 
-#include "globals.h"
+ #include "globals.h"
 
-#if ENABLE_REMOTE
 
-#include "systemcontainer.h"
+ #if ENABLE_REMOTE
+
+ #include "remotecontrol.h"
+ #include "systemcontainer.h"
 
 void RemoteControl::handle()
 {
