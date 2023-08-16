@@ -33,7 +33,6 @@
 
  #if ENABLE_REMOTE
 
- #include "remotecontrol.h"
  #include "systemcontainer.h"
 
 void RemoteControl::handle()
