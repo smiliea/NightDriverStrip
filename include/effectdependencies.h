@@ -57,7 +57,7 @@
 // Externals
 //
 
-#if USE_MATRIX
+#if USE_HUB75
     #include "ledmatrixgfx.h"
     #include "effects/strip/misceffects.h"
     #include "effects/matrix/PatternSerendipity.h"
@@ -83,6 +83,6 @@
     #include "effects/matrix/PatternWeather.h"
 #endif
 
-#ifdef USESTRIP
+#ifdef USE_WS281X
     #include "ledstripgfx.h"
 #endif

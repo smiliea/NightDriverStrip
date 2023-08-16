@@ -4,6 +4,7 @@ NightDriverStrip.code-workspace
 src/uzlib/src/*.o
 .history
 include/secrets.h
+platformio.ini
 lib/*
 .DS_Store
 site/node_modules

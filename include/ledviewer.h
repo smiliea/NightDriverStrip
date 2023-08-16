@@ -1,7 +1,7 @@
 
 //+--------------------------------------------------------------------------
 //
-// File:        ledviewer.cpp
+// File:        ledviewer.h
 //
 // NightDriverStrip - (c) 2018 Plummer's Software LLC.  All Rights Reserved.
 //
@@ -65,7 +65,7 @@ private:
 
 public:
 
-    LEDViewer(int port) :
+    explicit LEDViewer(int port) :
         _port(port),
         _server_fd(-1)
     {

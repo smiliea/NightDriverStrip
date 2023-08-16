@@ -66,7 +66,7 @@
 #ifndef PatternPongClock_H
 #define PatternPongClock_H
 
-#include "deviceconfig.h"
+#include "systemcontainer.h"
 
 #define BAT1_X 2 // Pong left bat x pos (this is where the ball collision occurs, the bat is drawn 1 behind these coords)
 #define BAT2_X (MATRIX_WIDTH - 4)
@@ -88,7 +88,7 @@ class PatternPongClock : public LEDStripEffect
     uint8_t bat1_update = 1; // flags - set to update bat position
     uint8_t bat2_update = 1;
     uint8_t bat1miss, bat2miss; // flags set on the minute or hour that trigger the bats to miss the ball, thus upping the score to match the time.
-    uint8_t restart = 1;        // game restart flag - set to 1 initially to setup 1st game
+    uint8_t restart = 1;        // game restart flag - set to 1 initially to set up 1st game
 
     uint8_t mins;
     uint8_t hours;
@@ -108,17 +108,17 @@ class PatternPongClock : public LEDStripEffect
         return 35;
     }
 
-    virtual bool RequiresDoubleBuffering() const override
+    bool RequiresDoubleBuffering() const override
     {
         return false;
     }
 
-    virtual void Start() override
+    void Start() override
     {
         time_t ttime = time(0);
         tm *local_time = localtime(&ttime);
 
-        bool ampm = !g_ptrDeviceConfig->Use24HourClock();
+        bool ampm = !g_ptrSystem->DeviceConfig().Use24HourClock();
 
         // update score / time
         mins = local_time->tm_min;
@@ -129,29 +129,31 @@ class PatternPongClock : public LEDStripEffect
             hours = 12;
     }
 
-    virtual void Draw() override
+    void Draw() override
     {
-        auto g = g_ptrEffectManager->g();
+        const time_t ttime = time(0);
+        const tm *local_time = localtime(&ttime);
 
-        time_t ttime = time(0);
-        tm *local_time = localtime(&ttime);
-
-        g->Clear();
+        g()->Clear();
 
         // draw pitch centre line
         for (uint16_t i = 0; i < MATRIX_WIDTH / 2; i += 2)
-            g->setPixel(MATRIX_WIDTH / 2, i, 0x6666);
+            g()->setPixel(MATRIX_WIDTH / 2, i, 0x6666);
 
-        // draw hh:mm seperator colon that blinks once per second
+        // draw hh:mm separator colon that blinks once per second
 
         if (local_time->tm_sec % 2 == 0)
         {
-            g->setPixel(MATRIX_WIDTH / 2, 4, RED16);
-            g->setPixel(MATRIX_WIDTH / 2, 6, RED16);
+            g()->setPixel(MATRIX_WIDTH / 2, 4, RED16);
+            g()->setPixel(MATRIX_WIDTH / 2, 6, RED16);
         }
 
         LEDMatrixGFX::backgroundLayer.setFont(gohufont11b);
-        char buffer[3];
+
+        // The compiler warns that with a nul terminator, 4 bytes could be needed, which is true
+        // but we're only writing 3 bytes, but I'll waste the byte to avoid the warning.
+
+        char buffer[4];
 
         auto clockColor = rgb24(255,255,255);
         sprintf(buffer, "%2d", hours);
@@ -160,7 +162,7 @@ class PatternPongClock : public LEDStripEffect
         sprintf(buffer, "%02d", mins);
         LEDMatrixGFX::backgroundLayer.drawString(MATRIX_WIDTH / 2 + 2, 0, clockColor, buffer);
 
-        // if restart flag is 1, setup a new game
+        // if restart flag is 1, set up a new game
         if (restart)
         {
             // set ball start pos
@@ -245,7 +247,7 @@ class PatternPongClock : public LEDStripEffect
                     bat1_target_y = 8 + random(0, 3);
                 }
             }
-            // if the miss flag isn't set,  set bat target to ball end point with some randomness so its not always hitting top of bat
+            // if the miss flag isn't set,  set bat target to ball end point with some randomness, so it's not always hitting top of bat
             else
             {
                 bat1_target_y = end_ball_y - random(0, BAT_HEIGHT);
@@ -290,7 +292,7 @@ class PatternPongClock : public LEDStripEffect
         }
 
         // move bat 1 towards target
-        // if bat y greater than target y move down until hit 0 (dont go any further or bat will move off screen)
+        // if bat y greater than target y move down until hit 0 (don't go any further or bat will move off screen)
         if (bat1_y > bat1_target_y && bat1_y > 0)
         {
             bat1_y--;
@@ -309,7 +311,7 @@ class PatternPongClock : public LEDStripEffect
         LEDMatrixGFX::backgroundLayer.fillRectangle(BAT1_X - 1, bat1_y, BAT1_X, bat1_y + BAT_HEIGHT, rgb24(255,255,255));
         //      }
 
-        // move bat 2 towards target (dont go any further or bat will move off screen)
+        // move bat 2 towards target (don't go any further or bat will move off screen)
         // if bat y greater than target y move down until hit 0
         if (bat2_y > bat2_target_y && bat2_y > 0)
         {
@@ -450,7 +452,7 @@ class PatternPongClock : public LEDStripEffect
                     bat2_target_y = bat2_target_y - random(1, 3);
                     ballvel_x = ballvel_x * -1;
                     if (ballvel_y > 0.5)
-                        ballvel_y = ballvel_y - random(1.0) - 0.5;;
+                        ballvel_y = ballvel_y - random(1.0) - 0.5;
                     break;
                 }
             }
@@ -460,7 +462,8 @@ class PatternPongClock : public LEDStripEffect
         uint8_t plot_x = (int)(ballpos_x + 0.5f);
         uint8_t plot_y = (int)(ballpos_y + 0.5f);
 
-        g->setPixel(plot_x, plot_y, WHITE16);
+        if (g()->isValidPixel(plot_x, plot_y))
+            g()->setPixel(plot_x, plot_y, WHITE16);
 
         // check if a bat missed the ball. if it did, reset the game.
         if (ballpos_x < 0 || ballpos_x > MATRIX_WIDTH)
@@ -468,7 +471,7 @@ class PatternPongClock : public LEDStripEffect
             restart = 1;
 
             // update score / time
-            bool ampm = !g_ptrDeviceConfig->Use24HourClock();
+            bool ampm = !g_ptrSystem->DeviceConfig().Use24HourClock();
 
             mins = local_time->tm_min;
             hours = local_time->tm_hour;

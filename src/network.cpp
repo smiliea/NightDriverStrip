@@ -22,7 +22,7 @@
 //
 // Description:
 //
-//    Network loop, remote contol, debug loop, etc.
+//    Network loop, remote control, debug loop, etc.
 //
 // History:     May-11-2021         Davepl      Commented
 //
@@ -33,32 +33,15 @@
 #include <HTTPClient.h>
 
 #include "globals.h"
+#include "systemcontainer.h"
 
-#if ENABLE_WEBSERVER
-    extern DRAM_ATTR CWebServer g_WebServer;
-#endif
+extern DRAM_ATTR std::mutex g_buffer_mutex;
 
-#if ENABLE_WIFI
-    DRAM_ATTR std::unique_ptr<NetworkReader> g_ptrNetworkReader = nullptr;
-#endif
+static DRAM_ATTR WiFiUDP l_Udp;              // UDP object used for NNTP, etc
 
-#if USE_WIFI_MANAGER
-#include <ESP_WiFiManager.h>
-DRAM_ATTR ESP_WiFiManager g_WifiManager("NightDriverWiFi");
-#endif
-
-extern DRAM_ATTR std::unique_ptr<LEDBufferManager> g_aptrBufferManager[NUM_CHANNELS];
-
-std::mutex g_buffer_mutex;
-String WiFi_ssid;
-String WiFi_password;
-
-// processRemoteDebugCmd()
-//
-// This is where we can add our own custom debugger commands
-
-extern AppTime  g_AppTime;
-extern uint32_t g_FPS;
+// Static initializers
+DRAM_ATTR bool NTPTimeClient::_bClockSet = false;                                   // Has our clock been set by SNTP?
+DRAM_ATTR std::mutex NTPTimeClient::_clockMutex;                                    // Clock guard mutex for SNTP client
 
 // processRemoteDebugCmd
 //
@@ -72,31 +55,33 @@ extern uint32_t g_FPS;
         if (str.equalsIgnoreCase("clock"))
         {
             debugA("Refreshing Time from Server...");
-            NTPTimeClient::UpdateClockFromWeb(&g_Udp);
+            NTPTimeClient::UpdateClockFromWeb(&l_Udp);
         }
         else if (str.equalsIgnoreCase("stats"))
         {
+            auto& bufferManager = g_ptrSystem->BufferManagers()[0];
+
             debugA("Displaying statistics....");
-            debugA("%s:%dx%d %dK", FLASH_VERSION_NAME, NUM_CHANNELS, NUM_LEDS, ESP.getFreeHeap() / 1024);
+            debugA("%s:%zux%d %uK", FLASH_VERSION_NAME, g_ptrSystem->Devices().size(), NUM_LEDS, ESP.getFreeHeap() / 1024);
             debugA("%sdB:%s",String(WiFi.RSSI()).substring(1).c_str(), WiFi.isConnected() ? WiFi.localIP().toString().c_str() : "None");
-            debugA("BUFR:%02d/%02d [%dfps]", g_aptrBufferManager[0]->Depth(), g_aptrBufferManager[0]->BufferCount(), g_FPS);
-            debugA("DATA:%+04.2lf-%+04.2lf", g_aptrBufferManager[0]->AgeOfOldestBuffer(), g_aptrBufferManager[0]->AgeOfNewestBuffer());
+            debugA("BUFR:%02zu/%02zu [%dfps]", bufferManager.Depth(), bufferManager.BufferCount(), g_Values.FPS);
+            debugA("DATA:%+04.2lf-%+04.2lf", bufferManager.AgeOfOldestBuffer(), bufferManager.AgeOfNewestBuffer());
 
             #if ENABLE_AUDIO
                 debugA("g_Analyzer._VU: %.2f, g_Analyzer._MinVU: %.2f, g_Analyzer.g_Analyzer._PeakVU: %.2f, g_Analyzer.gVURatio: %.2f", g_Analyzer._VU, g_Analyzer._MinVU, g_Analyzer._PeakVU, g_Analyzer._VURatio);
             #endif
 
             #if INCOMING_WIFI_ENABLED
-                debugA("Socket Buffer _cbReceived: %d", g_SocketServer._cbReceived);
+                debugA("Socket Buffer _cbReceived: %zu", g_ptrSystem->SocketServer()._cbReceived);
             #endif
         }
         else if (str.equalsIgnoreCase("clearsettings"))
         {
             debugA("Removing persisted settings....");
-            g_ptrDeviceConfig->RemovePersisted();
+            g_ptrSystem->DeviceConfig().RemovePersisted();
             RemoveEffectManagerConfig();
         }
-        else 
+        else
         {
             debugA("Unknown Command.  Extended Commands:");
             debugA("clock               Refresh time from server");
@@ -121,8 +106,8 @@ void SetupOTA(const String & strHostname)
         ArduinoOTA.setHostname(strHostname.c_str());
 
     ArduinoOTA
-        .onStart([]() {
-            g_bUpdateStarted = true;
+        .onStart([] {
+            g_Values.UpdateStarted = true;
 
             String type;
             if (ArduinoOTA.getCommand() == U_FLASH)
@@ -132,14 +117,15 @@ void SetupOTA(const String & strHostname)
 
             debugI("Stopping IR remote");
             #if ENABLE_REMOTE
-            g_RemoteControl.end();
+            g_ptrSystem->RemoteControl().end();
             #endif
 
             debugI("Start updating from OTA ");
             debugI("%s", type.c_str());
         })
-        .onEnd([]() {
+        .onEnd([] {
             debugI("\nEnd OTA");
+            g_Values.UpdateStarted = false;
         })
         .onProgress([](unsigned int progress, unsigned int total)
         {
@@ -147,15 +133,24 @@ void SetupOTA(const String & strHostname)
             if (millis() - last_time > 1000)
             {
                 last_time = millis();
-                debugI("Progress: %u%%\r", (progress / (total / 100)));
+                auto p = (progress / (total / 100));
+                debugI("OTA Progress: %u%%\r", p);
+
+                #if USE_HUB75
+                    auto pMatrix = std::static_pointer_cast<LEDMatrixGFX>(g_ptrSystem->EffectManager().GetBaseGraphics());
+                    pMatrix->SetCaption(str_sprintf("Update:%d%%", p), CAPTION_TIME);
+                    pMatrix->setLeds(LEDMatrixGFX::GetMatrixBackBuffer());
+                #endif
             }
             else
             {
-                debugV("Progress: %u%%\r", (progress / (total / 100)));
+                debugV("OTA Progress: %u%%\r", (progress / (total / 100)));
             }
 
         })
-        .onError([](ota_error_t error) {
+        .onError([](ota_error_t error)
+        {
+            g_Values.UpdateStarted = false;
             debugW("Error[%u]: ", error);
             if (error == OTA_AUTH_ERROR)
             {
@@ -186,21 +181,22 @@ void SetupOTA(const String & strHostname)
 
 // RemoteLoopEntry
 //
-// If enabled, this is the main thread loop for the remote control.  It is intialized and then
+// If enabled, this is the main thread loop for the remote control.  It is initialized and then
 // called once every 20ms to pump its work queue and scan for new remote codes, etc.  If no
 // remote is being used, this code and thread doesn't exist in the build.
 
 #if ENABLE_REMOTE
-extern RemoteControl g_RemoteControl;
 
 void IRAM_ATTR RemoteLoopEntry(void *)
 {
     //debugW(">> RemoteLoopEntry\n");
 
-    g_RemoteControl.begin();
+    auto& remoteControl = g_ptrSystem->RemoteControl();
+
+    remoteControl.begin();
     while (true)
     {
-        g_RemoteControl.handle();
+        remoteControl.handle();
         delay(20);
     }
 }
@@ -212,7 +208,11 @@ void IRAM_ATTR RemoteLoopEntry(void *)
 
 #if ENABLE_WIFI
 
-    bool ConnectToWiFi(uint cRetries)
+    #define WIFI_WAIT_BASE      4000    // Initial time to wait for WiFi to come up, in ms
+    #define WIFI_WAIT_INCREASE  1000    // Increase of WiFi waiting time per cycle, in ms
+
+
+    bool ConnectToWiFi(uint cRetries, bool waitForCredentials = false)
     {
         static bool bPreviousConnection = false;
 
@@ -222,12 +222,6 @@ void IRAM_ATTR RemoteLoopEntry(void *)
 
         debugI("Setting host name to %s...%s", cszHostname,WLtoString(WiFi.status()));
 
-        if (WiFi_ssid == "Unset" || WiFi_ssid.length() == 0)
-        {
-            debugW("WiFi Credentials not set, cannot connect");
-            return false;
-        }
-
         debugV("Wifi.disconnect");
         WiFi.disconnect();
         debugV("Wifi.mode");
@@ -236,15 +230,32 @@ void IRAM_ATTR RemoteLoopEntry(void *)
 
         for (uint iPass = 0; iPass < cRetries; iPass++)
         {
-            debugW("Pass %u of %u: Connecting to Wifi SSID: %s - ESP32 Free Memory: %u, PSRAM:%u, PSRAM Free: %u\n",
-                    iPass + 1, cRetries, WiFi_ssid, ESP.getFreeHeap(), ESP.getPsramSize(), ESP.getFreePsram());
+            if (WiFi_ssid.length() == 0)
+            {
+                debugW("WiFi credentials not set, cannot connect.");
 
-            WiFi.begin(WiFi_ssid.c_str(), WiFi_password.c_str());
+                if (waitForCredentials)
+                {
+                    debugW("Waiting for WiFi credentials to be set...");
+                    iPass = 0;
+                }
+                else
+                {
+                    break;
+                }
+            }
+            else
+            {
+                debugW("Pass %u of %u: Connecting to Wifi SSID: \"%s\" - ESP32 Free Memory: %u, PSRAM:%u, PSRAM Free: %u\n",
+                        iPass + 1, cRetries, WiFi_ssid.c_str(), ESP.getFreeHeap(), ESP.getPsramSize(), ESP.getFreePsram());
 
-            debugV("Done Wifi.begin, waiting for connection...");
+                WiFi.begin(WiFi_ssid.c_str(), WiFi_password.c_str());
+
+                debugV("Done Wifi.begin, waiting for connection...");
+            }
 
             // Give the module a few seconds to connect
-            delay(4000 + iPass * 1000);
+            delay(WIFI_WAIT_BASE + iPass * WIFI_WAIT_INCREASE);
 
             if (WiFi.isConnected())
             {
@@ -254,7 +265,7 @@ void IRAM_ATTR RemoteLoopEntry(void *)
         }
 
         // Additional Services onwwards reliant on network so close if not up.
-        if (false == WiFi.isConnected())
+        if (!WiFi.isConnected())
         {
             debugW("Giving up on WiFi\n");
             return false;
@@ -266,11 +277,15 @@ void IRAM_ATTR RemoteLoopEntry(void *)
         if (bPreviousConnection)
             return true;
 
+        bPreviousConnection = true;
+
         #if INCOMING_WIFI_ENABLED
+            auto& socketServer = g_ptrSystem->SocketServer();
+
             // Start listening for incoming data
             debugI("Starting/restarting Socket Server...");
-            g_SocketServer.release();
-            if (false == g_SocketServer.begin())
+            socketServer.release();
+            if (false == socketServer.begin())
                 throw std::runtime_error("Could not start socket server!");
 
             debugI("Socket server started.");
@@ -283,23 +298,35 @@ void IRAM_ATTR RemoteLoopEntry(void *)
 
         #if ENABLE_NTP
             debugI("Setting Clock...");
-            NTPTimeClient::UpdateClockFromWeb(&g_Udp);
+            NTPTimeClient::UpdateClockFromWeb(&l_Udp);
         #endif
 
         #if ENABLE_WEBSERVER
             debugI("Starting Web Server...");
-            g_WebServer.begin();
+            g_ptrSystem->WebServer().begin();
             debugI("Web Server begin called!");
         #endif
 
-        #if USE_MATRIX
-            //LEDStripEffect::mgraphics()->SetCaption(WiFi.localIP().toString().c_str(), 3000);
-        #endif
-
-        bPreviousConnection = true;
         return true;
     }
 
+    #if ENABLE_NTP
+        void UpdateNTPTime()
+        {
+            static unsigned long lastUpdate = 0;
+
+            if (WiFi.isConnected())
+            {
+                // If we've already retrieved the time successfully, we'll only actually update every NTP_DELAY_SECONDS seconds
+                if (!NTPTimeClient::HasClockBeenSet() || (millis() - lastUpdate) > ((NTP_DELAY_SECONDS) * 1000))
+                {
+                    debugV("Refreshing Time from Server...");
+                    if (NTPTimeClient::UpdateClockFromWeb(&l_Udp))
+                        lastUpdate = millis();
+                }
+            }
+        }
+    #endif
 #endif // ENABLE_WIFI
 
 // ProcessIncomingData
@@ -316,7 +343,7 @@ bool ProcessIncomingData(std::unique_ptr<uint8_t []> & payloadData, size_t paylo
 
     uint16_t command16 = payloadData[1] << 8 | payloadData[0];
 
-    debugV("payloadLength: %u, command16: %d", payloadLength, command16);
+    debugV("payloadLength: %zu, command16: %d", payloadLength, command16);
 
     // The very old original implementation used channel numbers, not a mask, and only channel 0 was supported at that time, so if
     // we see a Channel 0 asked for, it must be very old, and we massage it into the mask for Channel0 instead
@@ -372,19 +399,18 @@ bool ProcessIncomingData(std::unique_ptr<uint8_t []> & payloadData, size_t paylo
 
             std::lock_guard<std::mutex> guard(g_buffer_mutex);
 
-            //if (!heap_caps_check_integrity_all(true))
-            //    debugW("### Corrupt heap detected in WIFI_COMMAND_PIXELDATA64");
-
-            for (int iChannel = 0, channelMask = 1; iChannel < NUM_CHANNELS; iChannel++, channelMask <<= 1)
+            for (int iChannel = 0, channelMask = 1; iChannel < g_ptrSystem->BufferManagers().size(); iChannel++, channelMask <<= 1)
             {
                 if ((channelMask & channel16) != 0)
                 {
                     debugV("Processing for Channel %d", iChannel);
 
                     bool bDone = false;
-                    if (!g_aptrBufferManager[iChannel]->IsEmpty())
+                    auto& bufferManager = g_ptrSystem->BufferManagers()[iChannel];
+
+                    if (!bufferManager.IsEmpty())
                     {
-                        auto pNewestBuffer = g_aptrBufferManager[iChannel]->PeekNewestBuffer();
+                        auto pNewestBuffer = bufferManager.PeekNewestBuffer();
                         if (micros != 0 && pNewestBuffer->MicroSeconds() == micros && pNewestBuffer->Seconds() == seconds)
                         {
                             debugV("Updating existing buffer");
@@ -396,7 +422,7 @@ bool ProcessIncomingData(std::unique_ptr<uint8_t []> & payloadData, size_t paylo
                     if (!bDone)
                     {
                         debugV("No match so adding new buffer");
-                        auto pNewBuffer = g_aptrBufferManager[iChannel]->GetNewBuffer();
+                        auto pNewBuffer = bufferManager.GetNewBuffer();
                         if (!pNewBuffer->UpdateFromWire(payloadData, payloadLength))
                             return false;
                     }
@@ -442,7 +468,7 @@ bool ReadWiFiConfig()
         err = nvs_get_str(nvsROHandle, NAME_OF(WiFi_ssid), szBuffer, &len);
         if (ESP_OK != err)
         {
-            debugE("Coud not read WiFi_ssid from NVS");
+            debugE("Could not read WiFi_ssid from NVS");
             nvs_close(nvsROHandle);
             return false;
         }
@@ -452,14 +478,14 @@ bool ReadWiFiConfig()
         err = nvs_get_str(nvsROHandle, NAME_OF(WiFi_password), szBuffer, &len);
         if (ESP_OK != err)
         {
-            debugE("Coud not read WiFi_password from NVS");
+            debugE("Could not read WiFi_password from NVS");
             nvs_close(nvsROHandle);
             return false;
         }
         WiFi_password = szBuffer;
 
         // Don't check in changes that would display the password in logs, etc.
-        debugW("Retrieved SSID and Password from NVS: %s, %s", WiFi_ssid, "********");
+        debugW("Retrieved SSID and Password from NVS: %s, %s", WiFi_ssid.c_str(), "********");
 
         nvs_close(nvsROHandle);
         return true;
@@ -506,7 +532,7 @@ bool WriteWiFiConfig()
 
     if (success)
         // Do not check in code that displays the password in logs, etc.
-        debugW("Stored SSID and Password to NVS: %s, *******", WiFi_ssid);
+        debugW("Stored SSID and Password to NVS: %s, *******", WiFi_ssid.c_str());
 
     nvs_commit(nvsRWHandle);
     nvs_close(nvsRWHandle);
@@ -550,7 +576,7 @@ bool WriteWiFiConfig()
     }
 #endif
 
-#if INCOMING_WIFI_ENABLED 
+#if INCOMING_WIFI_ENABLED
 
     // SocketServerTaskEntry
     //
@@ -562,9 +588,11 @@ bool WriteWiFiConfig()
         {
             if (WiFi.isConnected())
             {
-                g_SocketServer.release();
-                g_SocketServer.begin();
-                g_SocketServer.ProcessIncomingConnectionsLoop();
+                auto& socketServer = g_ptrSystem->SocketServer();
+
+                socketServer.release();
+                socketServer.begin();
+                socketServer.ProcessIncomingConnectionsLoop();
                 debugW("Socket connection closed.  Retrying...\n");
             }
             delay(500);
@@ -606,19 +634,21 @@ bool WriteWiFiConfig()
 
             while (socket >= 0)
             {
-                if (g_ptrEffectManager->IsNewFrameAvailable())
+                auto& effectManager = g_ptrSystem->EffectManager();
+
+                if (effectManager.IsNewFrameAvailable())
                 {
-                    g_ptrEffectManager->SetNewFrameAvailable(false);
+                    effectManager.SetNewFrameAvailable(false);
 
                     debugV("Sending color data packet");
                     // Potentially too large for the stack, so we allocate it on the heap instead
                     std::unique_ptr<ColorDataPacket> pPacket = std::make_unique<ColorDataPacket>();
                     pPacket->header = COLOR_DATA_PACKET_HEADER;
-                    pPacket->width  = g_ptrEffectManager->g()->width();
-                    pPacket->height = g_ptrEffectManager->g()->height();
-                    if ((*g_ptrEffectManager)[0]->leds != nullptr)
+                    pPacket->width  = effectManager.g()->width();
+                    pPacket->height = effectManager.g()->height();
+                    if (effectManager.g()->leds != nullptr)
                     {
-                        memcpy(pPacket->colors, (*g_ptrEffectManager)[0]->leds, sizeof(CRGB) * NUM_LEDS);
+                        memcpy(pPacket->colors, effectManager.g()->leds, sizeof(CRGB) * NUM_LEDS);
 
                         if (!_viewer.SendPacket(socket, pPacket.get(), sizeof(ColorDataPacket)))
                         {
@@ -676,16 +706,17 @@ bool WriteWiFiConfig()
             }
 
             // If the reader container isn't available yet, we'll sleep for a second before we check again
-            if (!g_ptrNetworkReader)
+            if (!g_ptrSystem->HasNetworkReader())
             {
                 notifyWait = pdMS_TO_TICKS(1000);
                 continue;
             }
 
+            auto& networkReader = g_ptrSystem->NetworkReader();
             unsigned long now = millis();
 
             // Flag entries of which the read interval has passed
-            for (auto& entry : g_ptrNetworkReader->readers)
+            for (auto& entry : networkReader.readers)
             {
                 if (entry.canceled.load())
                     continue;
@@ -711,7 +742,7 @@ bool WriteWiFiConfig()
             now = millis();
 
             // Calculate how long we can sleep. This is determined by the reader that is closest to its interval passing.
-            for (auto& entry : g_ptrNetworkReader->readers)
+            for (auto& entry : networkReader.readers)
             {
                 if (entry.canceled.load())
                     continue;
@@ -739,21 +770,7 @@ bool WriteWiFiConfig()
             notifyWait = pdMS_TO_TICKS(holdMs);
         }
     }
-#endif // ENABLE_WIFI
 
-#if ENABLE_WIFI && ENABLE_NTP
-    void UpdateNTPTime()
-    {
-        if (WiFi.isConnected())
-        {
-            debugV("Refreshing Time from Server...");
-            NTPTimeClient::UpdateClockFromWeb(&g_Udp);
-
-        }
-    }
-#endif
-
-#if ENABLE_WIFI
     size_t NetworkReader::RegisterReader(std::function<void()> reader, unsigned long interval, bool flag)
     {
         // Add the reader with its flag unset
@@ -779,7 +796,7 @@ bool WriteWiFiConfig()
 
         readers[index].flag.store(true);
 
-        g_TaskManager.NotifyNetworkThread();
+        g_ptrSystem->TaskManager().NotifyNetworkThread();
     }
 
     void NetworkReader::CancelReader(size_t index)

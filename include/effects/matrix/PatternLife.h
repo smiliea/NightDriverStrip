@@ -81,7 +81,7 @@ public:
 // We check for loops by keeping a number of hashes of previous frames.  A walker that goes up and across
 // the screen cycles every 2 times it crosses, so max dimension times 2 is a good place to start
 
-#define CRC_LENGTH (std::max(MATRIX_HEIGHT, MATRIX_WIDTH) * 2)
+constexpr auto CRC_LENGTH = (std::max(MATRIX_HEIGHT, MATRIX_WIDTH) * 4 + 1);
 
 class PatternLife : public LEDStripEffect
 {
@@ -95,7 +95,7 @@ private:
     unsigned long seed;
 
 
-    virtual bool Init(std::shared_ptr<GFXBase> gfx[NUM_CHANNELS]) override
+    bool Init(std::vector<std::shared_ptr<GFXBase>>& gfx) override
     {
         LEDStripEffect::Init(gfx);
 
@@ -108,12 +108,12 @@ private:
         return true;
     }
 
-    virtual bool RequiresDoubleBuffering() const override
+    bool RequiresDoubleBuffering() const override
     {
-        return false;
+        return true;
     }
 
-    // A table of seed vs generation count.  These are seeds that net long runs of at leat 3000 generations.
+    // A table of seed vs generation count.  These are seeds that net long runs of at least 3000 generations.
     //
     // Example:  Seed: 92465, Generations: 1626
 
@@ -144,7 +144,7 @@ private:
     void randomFillWorld()
     {
         // Some fraction of the time we pick a pre-baked seed that we know lasts for a lot
-        // of generations.  Otherwise we pick a random seed and run with that.
+        // of generations.  Otherwise, we pick a random seed and run with that.
 
         srand(millis());
         if (random(0, 4) == 0)
@@ -208,7 +208,7 @@ public:
         bStuckInLoop = 0;
     }
 
-    virtual void Draw() override
+    void Draw() override
     {
         if (cGeneration == 0)
             Reset();
@@ -225,7 +225,7 @@ public:
         }
 
         // We maintain a scrolling window of the last N crcs and if the current crc makes it all
-        // the way down to the bototm half we assume we're stuck in a loop and restart.
+        // the way down to the bottom half we assume we're stuck in a loop and restart.
         // We have to first extract the alive bits alone because we don't want the hue and brightness
         // data to mess with the CRC.
 
@@ -240,8 +240,8 @@ public:
         checksums[CRC_LENGTH - 1] = crc;
 
 
-        // Look for any occurance of the current CRC in the first half of the window, which would mean
-        // a loop has occured.  If
+        // Look for any occurrences of the current CRC in the first half of the window, which would mean
+        // a loop has occurred.  If
 
         if (bStuckInLoop)
         {
