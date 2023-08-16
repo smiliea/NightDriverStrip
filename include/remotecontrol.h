@@ -154,7 +154,7 @@ class RemoteControl
 {
   private:
     IRrecv _IR_Receive;
-    
+    uint8_t CurBrightness = 255;
 
   public:
 

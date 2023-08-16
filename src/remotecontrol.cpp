@@ -78,24 +78,30 @@ void RemoteControl::handle()
         effectManager.ClearRemoteColor();
         effectManager.SetInterval(0);
         effectManager.StartEffect();
-        g_Values.Brightness = 255;
+        CurBrightness = 255;
+        g_Values.Brightness = CurBrightness;
         return;
     }
     else if (IR_OFF == result)
     {
-        g_Values.Brightness = std::max(MIN_BRIGHTNESS, (int) g_Values.Brightness - BRIGHTNESS_STEP);
+
         return;
     }
     else if (IR_BPLUS == result)
     {
-        effectManager.ClearRemoteColor();
-        effectManager.NextEffect();
+        //effectManager.ClearRemoteColor();
+        //effectManager.NextEffect();
+        g_Values.Brightness = 255;
+        g_Values.Brightness = CurBrightness;
         return;
     }
     else if (IR_BMINUS == result)
     {
-        effectManager.ClearRemoteColor();
-        effectManager.PreviousEffect();
+        //effectManager.ClearRemoteColor();
+        //effectManager.PreviousEffect();
+        CurBrightness = std::max(MIN_BRIGHTNESS, (int) g_Values.Brightness - BRIGHTNESS_STEP);
+        g_Values.Brightness = CurBrightness;
+        debugV("Changing Brightness: %d\n", g_Values.Brightness);
         return;
     }
     else if (IR_SMOOTH == result)
