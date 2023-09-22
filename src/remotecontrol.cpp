@@ -28,12 +28,11 @@
 // History:     Jun-14-2023     Rbergen        Extracted handle() from header
 //---------------------------------------------------------------------------
 
- #include "globals.h"
+#include "globals.h"
 
+#if ENABLE_REMOTE
 
- #if ENABLE_REMOTE
-
- #include "systemcontainer.h"
+#include "systemcontainer.h"
 
 void RemoteControl::handle()
 {
@@ -78,26 +77,24 @@ void RemoteControl::handle()
         effectManager.ClearRemoteColor();
         effectManager.SetInterval(0);
         effectManager.StartEffect();
-        CurBrightness = 255;
-        g_Values.Brightness = CurBrightness;
+        g_Values.Brightness = 255;
         return;
     }
     else if (IR_OFF == result)
     {
+        g_Values.Brightness = std::max(MIN_BRIGHTNESS, (int) g_Values.Brightness - BRIGHTNESS_STEP);
         return;
     }
     else if (IR_BPLUS == result)
     {
-        CurBrightness= 255;
-        g_Values.Brightness = CurBrightness;
-        debugI("Changing Brightness: %d\n", g_Values.Brightness);
+        effectManager.ClearRemoteColor();
+        effectManager.NextEffect();
         return;
     }
     else if (IR_BMINUS == result)
     {
-        CurBrightness = std::max(MIN_BRIGHTNESS, (int) g_Values.Brightness - BRIGHTNESS_STEP);
-        g_Values.Brightness = CurBrightness;
-        debugI("Changing Brightness: %d\n", g_Values.Brightness);
+        effectManager.ClearRemoteColor();
+        effectManager.PreviousEffect();
         return;
     }
     else if (IR_SMOOTH == result)
@@ -107,15 +104,11 @@ void RemoteControl::handle()
     }
     else if (IR_STROBE == result)
     {
-        effectManager.ClearRemoteColor();
-        effectManager.PreviousEffect();
-        //effectManager.NextPalette();
+        effectManager.NextPalette();
     }
     else if (IR_FLASH == result)
     {
-        effectManager.ClearRemoteColor();
-        effectManager.NextEffect();
-        //effectManager.PreviousPalette();
+        effectManager.PreviousPalette();
     }
     else if (IR_FADE == result)
     {
